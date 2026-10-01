@@ -30,6 +30,47 @@ button, input, textarea { font: inherit; }
 .file-input { display: none; }
 .network-banner, .conflict-banner { padding: 9px 22px; font-size: 13px; }
 .network-banner.offline { color: #765c15; background: #fff3ce; border-bottom: 1px solid #f1d98f; }
+.network-banner.studio-offline { color: #721c24; background: #fff0f0; border-bottom: 1px solid #f3b8b8; }
+.attention-badge { margin-right: 2px; }
+.attention-badge .el-badge__content { z-index: 1; }
+.studio-chip { display: inline-flex; align-items: center; gap: 3px; }
+.studio-chip .el-icon { margin-right: 2px; }
+.timeline-block.returned { box-shadow: inset 3px 0 0 #35a278; }
+.batch-card { padding: 8px 0; border-bottom: 1px solid #edf1f6; font-size: 12px; }
+.batch-card > div { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.batch-card b { color: #233452; font-size: 12px; }
+.batch-card small { display: block; margin: 3px 0; color: #7c8799; }
+.batch-card.failed { background: #fff7f6; border-radius: 8px; padding: 8px; margin: 4px 0; border-bottom: 0; }
+.batch-name-input { margin-bottom: 10px; }
+.studio-textarea :deep(textarea) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.studio-card { margin-top: 10px; padding: 11px; border: 1px solid #cdeadd; border-radius: 9px; background: #f3fbf8; }
+.studio-card h3 { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; color: #1f7a5c; font-size: 12px; }
+.studio-card.empty { border-color: #e0e7f0; background: #f8fafc; }
+.studio-card.empty h3 { color: #34435b; }
+.studio-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.studio-grid label { display: block; color: #647187; font-size: 10px; font-weight: 700; }
+.studio-grid code { color: #1f5d49; font-size: 12px; }
+.studio-grid span { color: #314057; font-size: 12px; }
+.studio-note { margin: 7px 0 0; color: #4a7a68; font-size: 11px; line-height: 1.5; }
+.failed-banner { padding: 9px 11px; margin-bottom: 10px; border-radius: 8px; color: #721c24; background: #fff0f0; font-size: 12px; }
+.batch-retry-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; margin-bottom: 8px; border: 1px solid #f3b8b8; border-radius: 9px; background: #fff7f6; }
+.batch-retry-row div { display: flex; flex-direction: column; gap: 2px; }
+.batch-retry-row small { color: #7c8799; font-size: 11px; }
+.pending-card { padding: 12px; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
+.pending-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pending-head code { color: #56627a; font-size: 11px; }
+.pending-hint { margin: 7px 0; color: #6b7790; font-size: 12px; line-height: 1.5; }
+.pending-meta { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; color: #43536c; font-size: 12px; }
+.pending-actions { display: flex; align-items: center; gap: 8px; }
+.assign-select { flex: 1; }
+.conflict-intro { display: flex; align-items: center; gap: 7px; padding: 9px 11px; margin-bottom: 10px; border-radius: 8px; color: #721c24; background: #fff0f0; font-size: 12px; }
+.conflict-card { padding: 12px; margin-bottom: 10px; border: 1px solid #f3b8b8; border-radius: 10px; background: #fff; }
+.conflict-values { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 9px; }
+.conflict-side { display: flex; flex-direction: column; gap: 6px; padding: 9px; border-radius: 8px; }
+.conflict-side.local { background: #f2f6ff; border: 1px solid #d2e0fb; }
+.conflict-side.remote { background: #f0fbf6; border: 1px solid #cdeadd; }
+.conflict-side small { color: #66748a; font-size: 11px; }
+.conflict-side pre { margin: 0; min-height: 34px; max-height: 110px; overflow: auto; white-space: pre-wrap; word-break: break-word; color: #24334d; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .conflict-banner { display: flex; align-items: center; justify-content: space-between; gap: 24px; color: #721c24; background: #fff0f0; border-bottom: 1px solid #f3b8b8; }
 .conflict-banner strong { margin-right: 12px; }
 .conflict-actions { display: flex; gap: 8px; }

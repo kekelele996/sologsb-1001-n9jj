@@ -3,11 +3,11 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Clock, Delete, DocumentCopy, Download, EditPen, Files, Lock, MagicStick, Monitor,
+  Clock, Delete, DocumentCopy, Download, EditPen, Files, Lock, MagicStick, Microphone, Monitor,
   RefreshLeft, RefreshRight, Search, Unlock, UploadFilled,
 } from '@element-plus/icons-vue'
 import { useEditorStore } from './store/editor'
-import type { Cue, CueConflict } from './types'
+import type { Cue, CueConflict, StudioReturn, StudioReturnItem } from './types'
 import { formatTime } from './utils/subtitle'
 
 const store = useEditorStore()
@@ -16,6 +16,8 @@ const fileInput = ref<HTMLInputElement>()
 const snapshotDialog = ref(false)
 const snapshotName = ref('')
 const search = ref('')
+const studioDialog = ref(false)
+const returnFileInput = ref<HTMLInputElement>()
 
 const filteredCues = computed(() => {
   const query = search.value.trim().toLowerCase()
@@ -90,6 +92,70 @@ function createSnapshot() {
   snapshotDialog.value = false
   ElMessage.success(store.t('savedNow'))
 }
+// —— 配音棚回传 ——
+async function importReturnFile(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  try {
+    const record = await store.importStudioReturn(file)
+    if (record.parseFailed) {
+      ElMessage.warning(store.t('returnParseError'))
+    } else {
+      const applied = record.items.filter((item) => item.status === 'applied' || item.status === 'assigned').length
+      const pending = record.items.filter((item) => item.status === 'pending').length
+      ElMessage.success(store.t('returnImported', { applied, pending }))
+    }
+  } catch {
+    ElMessage.error(store.t('importError'))
+  } finally {
+    input.value = ''
+  }
+}
+function simulateReturn() {
+  const record = store.simulateStudioReturn()
+  const applied = record.items.filter((item) => item.status === 'applied' || item.status === 'assigned').length
+  const pending = record.items.filter((item) => item.status === 'pending').length
+  ElMessage.success(store.t('returnImported', { applied, pending }))
+}
+function retryReturn(returnId: string) {
+  store.retryStudioReturn(returnId)
+  ElMessage.success(store.t('retryFromStudio'))
+}
+function assignItem(returnId: string, itemId: string, cueId: string) {
+  store.assignReturnItem(returnId, itemId, cueId)
+}
+function acceptSuggestion(returnId: string, item: StudioReturnItem) {
+  if (item.suggestedCueId) store.assignReturnItem(returnId, item.id, item.suggestedCueId)
+}
+function discardItem(returnId: string, itemId: string) {
+  store.discardReturnItem(returnId, itemId)
+}
+function ackItem(returnId: string, itemId: string) {
+  store.acknowledgeMissing(returnId, itemId)
+}
+function kindLabel(kind: StudioReturnItem['kind']) {
+  return store.t(kind === 'matched' ? 'matched' : kind === 'misaligned' ? 'misaligned' : kind === 'extra' ? 'extra' : 'missing')
+}
+function kindTagType(kind: StudioReturnItem['kind']) {
+  return kind === 'matched' ? 'success' : kind === 'misaligned' ? 'warning' : kind === 'extra' ? 'danger' : 'info'
+}
+function returnStatusLabel(status: StudioReturnItem['status']) {
+  return store.t(status === 'applied' ? 'applied' : status === 'assigned' ? 'assigned' : status === 'discarded' ? 'discarded' : status === 'ignored' ? 'ignored' : 'pending')
+}
+function returnStatusTagType(status: StudioReturnItem['status']) {
+  return status === 'applied' || status === 'assigned' ? 'success' : status === 'pending' ? 'warning' : 'info'
+}
+function recordAppliedCount(record: StudioReturn) {
+  return record.items.filter((item) => item.status === 'applied' || item.status === 'assigned').length
+}
+function recordPendingCount(record: StudioReturn) {
+  return record.items.filter((item) => item.status === 'pending').length
+}
+function cueLabel(cueId?: string) {
+  const cue = project.value.cues.find((item) => item.id === cueId)
+  return cue ? `${formatTime(cue.start)} · ${cue.source.slice(0, 20)}` : '—'
+}
 function onKeydown(event: KeyboardEvent) {
   const target = event.target as HTMLElement
   if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable) return
@@ -146,6 +212,9 @@ const handleOffline = () => setOnline(false)
         <input ref="fileInput" class="file-input" type="file" accept=".srt,.txt,text/plain" @change="importFile" />
         <el-button :icon="UploadFilled" @click="fileInput?.click()">{{ store.t('import') }}</el-button>
         <el-button :icon="Download" @click="store.exportSrt">{{ store.t('export') }}</el-button>
+        <el-badge :value="store.pendingReturnCount" :hidden="!store.pendingReturnCount" class="return-badge">
+          <el-button :icon="Microphone" @click="studioDialog = true">{{ store.t('studioReturn') }}</el-button>
+        </el-badge>
         <el-button type="primary" :icon="DocumentCopy" @click="snapshotDialog = true">{{ store.t('snapshot') }}</el-button>
       </div>
     </header>
@@ -215,10 +284,10 @@ const handleOffline = () => setOnline(false)
           <div class="timeline-scroll">
             <div class="timeline" :style="{ width: `${timelineZoom * 100}%` }">
               <button
-                v-for="cue in filteredCues" :key="cue.id" class="timeline-block" :class="{ active: cue.id === selectedCueId, issue: cue.status === 'issue', locked: cue.locked }"
+                v-for="cue in filteredCues" :key="cue.id" class="timeline-block" :class="{ active: cue.id === selectedCueId, issue: cue.status === 'issue', locked: cue.locked, 'has-studio': cue.actualDuration != null || !!cue.dubActorName }"
                 :style="{ left: `${(cue.start / store.totalDuration) * 100}%`, width: `${Math.max(1.8, ((cue.end - cue.start) / store.totalDuration) * 100)}%`, borderColor: actorColor(cue.actorId) }"
-                :title="`${formatTime(cue.start)} · ${cue.source}`" @click="store.selectCue(cue.id)"
-              ><span>{{ actorName(cue.actorId).split('/')[0] }}</span><b>{{ cue.target || cue.source }}</b></button>
+                :title="`${formatTime(cue.start)} · ${cue.source}${cue.actualDuration != null ? ` · ${store.t('actualDuration')} ${cue.actualDuration}s` : ''}`" @click="store.selectCue(cue.id)"
+              ><span>{{ actorName(cue.actorId).split('/')[0] }}</span><b>{{ cue.target || cue.source }}</b><i v-if="cue.actualDuration != null || cue.dubActorName" class="studio-dot" /></button>
               <div class="timeline-ruler"><span v-for="tick in [0, 15, 30, 45, 60]" :key="tick" :style="{ left: `${(tick / store.totalDuration) * 100}%` }">{{ tick }}s</span></div>
             </div>
           </div>
@@ -246,6 +315,11 @@ const handleOffline = () => setOnline(false)
                 <el-tag size="small" :type="statusType(cue.status)">{{ statusLabel(cue.status) }}</el-tag>
                 <el-icon v-if="cue.locked"><Lock /></el-icon>
                 <span class="cue-warning-count" v-if="cueWarnings(cue).length">{{ cueWarnings(cue).length }} context</span>
+              </div>
+              <div v-if="cue.actualDuration != null || cue.dubActorName" class="cue-studio-line" :title="store.t('studioOwned')">
+                <el-icon><Microphone /></el-icon>
+                <span v-if="cue.actualDuration != null">{{ store.t('actualDuration') }} <b>{{ cue.actualDuration }}s</b></span>
+                <span v-if="cue.dubActorName">{{ store.t('dubActor') }} <b>{{ cue.dubActorName }}</b></span>
               </div>
               <p class="source-text">{{ cue.source }}</p>
               <p class="target-text" :class="{ empty: !cue.target }">{{ cue.target || '尚未填写译文' }}</p>
@@ -302,6 +376,12 @@ const handleOffline = () => setOnline(false)
             <p v-for="term in selectedTermMismatches" :key="term.id" class="check-warning">{{ store.t('termMismatch', { source: term.source, target: term.target }) }}</p>
             <p v-if="selectedCue.termIds.length && !selectedTermMismatches.length" class="check-ok">{{ store.t('noTermMismatch') }}</p>
           </div>
+
+          <div v-if="selectedCue.actualDuration != null || selectedCue.dubActorName" class="studio-fields">
+            <div class="studio-fields-heading"><el-icon><Microphone /></el-icon>{{ store.t('studioOwned') }}</div>
+            <div v-if="selectedCue.actualDuration != null" class="studio-field"><label>{{ store.t('actualDuration') }}</label><b>{{ selectedCue.actualDuration }}s</b></div>
+            <div v-if="selectedCue.dubActorName" class="studio-field"><label>{{ store.t('dubActor') }}</label><b>{{ selectedCue.dubActorName }}</b></div>
+          </div>
         </div>
         <div v-else class="empty-inspector">{{ store.t('selectHint') }}</div>
       </aside>
@@ -328,6 +408,74 @@ const handleOffline = () => setOnline(false)
         <p v-if="!project.snapshots.length" class="empty-state">{{ store.t('noSnapshots') }}</p>
       </div>
       <template #footer><el-button type="primary" @click="createSnapshot">{{ store.t('snapshot') }}</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="studioDialog" :title="store.t('studioReturn')" width="840px" top="6vh">
+      <div class="studio-intro">
+        <p>{{ store.t('studioReturnHint') }}</p>
+        <p class="studio-file-hint">{{ store.t('returnFileHint') }}</p>
+      </div>
+      <div class="studio-actions">
+        <input ref="returnFileInput" class="file-input" type="file" accept=".json,application/json" @change="importReturnFile" />
+        <el-button type="primary" :icon="UploadFilled" @click="returnFileInput?.click()">{{ store.t('importReturn') }}</el-button>
+        <el-button :icon="MagicStick" @click="simulateReturn">{{ store.t('simulateReturn') }}</el-button>
+      </div>
+
+      <div v-for="record in project.studioReturns" :key="record.id" class="return-batch">
+        <div class="return-batch-head">
+          <div class="return-batch-title">
+            <el-icon><Microphone /></el-icon>
+            <b>{{ record.source === 'simulated' ? store.t('simulateReturn') : record.source }}</b>
+            <small>{{ new Date(record.importedAt).toLocaleString() }}</small>
+          </div>
+          <div class="return-batch-stats">
+            <el-tag v-if="record.parseFailed" type="danger" size="small">{{ store.t('parseFailed') }}</el-tag>
+            <template v-else>
+              <el-tag type="success" size="small">{{ store.t('appliedCount', { count: recordAppliedCount(record) }) }}</el-tag>
+              <el-tag v-if="recordPendingCount(record)" type="warning" size="small">{{ store.t('pendingCount', { count: recordPendingCount(record) }) }}</el-tag>
+            </template>
+            <el-button v-if="record.parseFailed || recordPendingCount(record)" size="small" :icon="RefreshRight" @click="retryReturn(record.id)">{{ store.t('retryFromStudio') }}</el-button>
+          </div>
+        </div>
+        <p v-if="record.parseFailed" class="return-parse-error">{{ store.t('returnParseError') }}</p>
+        <div v-if="!record.parseFailed" class="return-items">
+          <div v-for="item in record.items" :key="item.id" class="return-item" :class="item.kind">
+            <div class="return-item-main">
+              <el-tag size="small" :type="kindTagType(item.kind)" effect="dark">{{ kindLabel(item.kind) }}</el-tag>
+              <template v-if="item.kind !== 'missing'">
+                <code v-if="item.timecode != null">{{ formatTime(item.timecode) }}s</code>
+                <span class="return-duration">{{ store.t('actualDuration') }} <b>{{ item.actualDuration }}s</b></span>
+                <span v-if="item.dubActorName" class="return-dub">{{ store.t('dubActor') }} <b>{{ item.dubActorName }}</b></span>
+              </template>
+              <template v-else>
+                <span class="return-missing-cue">{{ cueLabel(item.missingCueId) }}</span>
+              </template>
+              <span v-if="item.reason" class="return-reason">{{ store.t('reason') }}：{{ item.reason }}</span>
+            </div>
+            <div class="return-item-actions">
+              <template v-if="item.status === 'pending'">
+                <el-button v-if="item.kind === 'misaligned' && item.suggestedCueId" size="small" type="success" plain @click="acceptSuggestion(record.id, item)">✓ {{ store.t('assignToCue') }}：{{ cueLabel(item.suggestedCueId) }}</el-button>
+                <el-select
+                  v-if="item.kind !== 'missing'"
+                  :model-value="item.cueId"
+                  size="small"
+                  :placeholder="store.t('selectCueToAssign')"
+                  filterable
+                  class="return-assign-select"
+                  @change="assignItem(record.id, item.id, String($event))"
+                >
+                  <el-option v-for="cue in project.cues" :key="cue.id" :label="`${formatTime(cue.start)} · ${cue.source.slice(0, 22)}`" :value="cue.id" />
+                </el-select>
+                <el-button v-if="item.kind === 'missing'" size="small" @click="ackItem(record.id, item.id)">{{ store.t('acknowledge') }}</el-button>
+                <el-button v-else size="small" text type="danger" @click="discardItem(record.id, item.id)">{{ store.t('discard') }}</el-button>
+              </template>
+              <el-tag v-else size="small" :type="returnStatusTagType(item.status)">{{ returnStatusLabel(item.status) }}</el-tag>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p v-if="!project.studioReturns.length" class="empty-state">{{ store.t('noReturns') }}</p>
+      <template #footer><el-button @click="studioDialog = false">{{ store.t('close') }}</el-button></template>
     </el-dialog>
   </div>
 </template>

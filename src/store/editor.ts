@@ -1,8 +1,9 @@
 import { defineStore } from 'pinia'
-import type { Cue, EditorDocument, Locale, Snapshot } from '../types'
+import type { Cue, EditorDocument, Locale, Snapshot, StudioRecording, StudioReturn, StudioReturnItem } from '../types'
 import { loadDocument, saveDocument } from '../utils/db'
 import { makeId } from '../utils/id'
 import { parseScript, parseSrt, toSrt } from '../utils/subtitle'
+import { applyStudioFields, migrateDocument, parseStudioReturn, reconcileRecordings, simulateRecordings } from '../utils/studio'
 import { translate, type MessageKey } from '../i18n'
 
 const DOCUMENT_ID = 'subtitle-dubbing-document'
@@ -40,6 +41,7 @@ const createDefaultDocument = (): EditorDocument => ({
     { id: 'cue-demo-06', start: 25.4, end: 31.2, source: '所以我们决定把安装说明拆开，并为每个平台补上验证步骤。', target: '因此，我们拆分安装说明，并为每个平台补上验证步骤。', actorId: 'actor-chen', speed: 1.05, termIds: [], status: 'draft', locked: false },
   ],
   snapshots: [],
+  studioReturns: [],
 })
 
 type SaveState = 'saved' | 'dirty' | 'saving' | 'conflict'
@@ -74,6 +76,12 @@ export const useEditorStore = defineStore('subtitle-editor', {
     totalDuration(state): number {
       return Math.max(10, ...state.document.cues.map((cue) => cue.end)) * 1.04
     },
+    pendingReturnCount(state): number {
+      return state.document.studioReturns.reduce(
+        (sum, item) => sum + item.items.filter((entry) => entry.status === 'pending').length,
+        0,
+      )
+    },
   },
   actions: {
     async initialize() {
@@ -81,7 +89,7 @@ export const useEditorStore = defineStore('subtitle-editor', {
       this.online = navigator.onLine
       const stored = await loadDocument(DOCUMENT_ID)
       if (stored) {
-        this.document = stored
+        this.document = migrateDocument(stored)
         this.lastSeenRevision = stored.revision
       } else {
         const saved = await saveDocument(plainDocument(this.document))
@@ -315,6 +323,108 @@ export const useEditorStore = defineStore('subtitle-editor', {
       anchor.download = `${this.document.title || 'subtitle'}.srt`
       anchor.click()
       URL.revokeObjectURL(url)
+    },
+    // —— 配音棚回传：实录时长与替班归配音棚，译文/时间码/校对状态归工作台 ——
+    async importStudioReturn(file: File) {
+      const rawText = await file.text()
+      let recordings: StudioRecording[] = []
+      let parseFailed = false
+      try {
+        recordings = parseStudioReturn(rawText)
+      } catch {
+        parseFailed = true
+      }
+      const items = parseFailed ? [] : reconcileRecordings(this.document.cues, recordings)
+      const record: StudioReturn = {
+        id: makeId('return'),
+        importedAt: Date.now(),
+        source: file.name,
+        rawText,
+        recordings,
+        parseFailed,
+        items,
+      }
+      this.document.studioReturns.unshift(record)
+      if (!parseFailed) this.applyReturnItems(record)
+      this.markChanged('studio-return', true)
+      return record
+    },
+    simulateStudioReturn() {
+      const recordings = simulateRecordings(this.document.cues, this.document.actors.map((actor) => actor.name))
+      const items = reconcileRecordings(this.document.cues, recordings)
+      const record: StudioReturn = {
+        id: makeId('return'),
+        importedAt: Date.now(),
+        source: 'simulated',
+        recordings,
+        parseFailed: false,
+        items,
+      }
+      this.document.studioReturns.unshift(record)
+      this.applyReturnItems(record)
+      this.markChanged('studio-return', true)
+      return record
+    },
+    retryStudioReturn(returnId: string) {
+      const record = this.document.studioReturns.find((item) => item.id === returnId)
+      if (!record) return
+      // 从配音棚那侧重试：保留的原始数据重新解析 / 重新按时间码匹配
+      if (record.parseFailed && record.rawText) {
+        try {
+          record.recordings = parseStudioReturn(record.rawText)
+          record.parseFailed = false
+        } catch {
+          record.parseFailed = true
+        }
+      }
+      if (!record.parseFailed) {
+        const previouslyAssigned = new Set(
+          record.items
+            .filter((item) => item.status === 'assigned' && item.cueId)
+            .map((item) => item.cueId as string),
+        )
+        record.items = reconcileRecordings(this.document.cues, record.recordings)
+        record.items.forEach((item) => {
+          const targetCueId = item.cueId ?? item.suggestedCueId
+          if (item.status === 'pending' && targetCueId && previouslyAssigned.has(targetCueId)) {
+            item.status = 'assigned'
+            item.cueId = targetCueId
+          }
+        })
+        this.applyReturnItems(record)
+      }
+      this.markChanged('studio-return-retry', true)
+    },
+    assignReturnItem(returnId: string, itemId: string, cueId: string) {
+      const record = this.document.studioReturns.find((item) => item.id === returnId)
+      const item = record?.items.find((entry) => entry.id === itemId)
+      if (!record || !item || item.status !== 'pending') return
+      item.status = 'assigned'
+      item.cueId = cueId
+      const cue = this.document.cues.find((entry) => entry.id === cueId)
+      if (cue) applyStudioFields(cue, item)
+      this.markChanged('studio-return-assign', true)
+    },
+    discardReturnItem(returnId: string, itemId: string) {
+      const record = this.document.studioReturns.find((item) => item.id === returnId)
+      const item = record?.items.find((entry) => entry.id === itemId)
+      if (!record || !item || item.status !== 'pending') return
+      item.status = 'discarded'
+      this.markChanged('studio-return-discard', true)
+    },
+    acknowledgeMissing(returnId: string, itemId: string) {
+      const record = this.document.studioReturns.find((item) => item.id === returnId)
+      const item = record?.items.find((entry) => entry.id === itemId)
+      if (!record || !item || item.status !== 'pending') return
+      item.status = 'ignored'
+      this.markChanged('studio-return-ack', true)
+    },
+    applyReturnItems(record: StudioReturn) {
+      record.items.forEach((item) => {
+        if (item.kind !== 'matched' || !item.cueId) return
+        const cue = this.document.cues.find((entry) => entry.id === item.cueId)
+        if (cue) applyStudioFields(cue, item)
+      })
     },
   },
 })
